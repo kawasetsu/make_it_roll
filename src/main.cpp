@@ -15,6 +15,8 @@ using namespace yarp::dev;
 using namespace yarp::sig;
 using namespace yarp::math;
 
+#define M_PI 3.14159265359
+
 
 /***************************************************/
 class CtrlModule: public RFModule
@@ -32,8 +34,11 @@ protected:
     Vector cogL,cogR;
     bool okL,okR;
 
+    //context
+    int context_init;
+
     //vector for initial pose
-    Vector vectPosInit, vectOriInit;
+    Vector vectPosInit, vectOriInit, vectGazeInit;
 
     /***************************************************/
     bool getCOG(ImageOf<PixelRgb> &img, Vector &cog)
@@ -42,13 +47,10 @@ protected:
         int yMean=0;
         int ct=0;
 
-        for (int x=0; x<img.width(); x++)
-        {
-            for (int y=0; y<img.height(); y++)
-            {
+        for(int x=0; x<img.width(); x++){
+            for (int y=0; y<img.height(); y++){
                 PixelRgb &pixel=img.pixel(x,y);
-                if ((pixel.b>5.0*pixel.r) && (pixel.b>5.0*pixel.g))
-                {
+                if ((pixel.b>5.0*pixel.r) && (pixel.b>5.0*pixel.g)){
                     xMean+=x;
                     yMean+=y;
                     ct++;
@@ -56,38 +58,29 @@ protected:
             }
         }
 
-        if (ct>0)
-        {
+        if (ct>0){
             cog.resize(2);
             cog[0]=xMean/ct;
             cog[1]=yMean/ct;
             return true;
         }
-        else
+        else{
             return false;
+        }
     }
 
     /***************************************************/
     Vector retrieveTarget3D(const Vector &cogL, const Vector &cogR)
-    {
-        // select the right image plane: 0 (left), 1 (right)
-        int camSel=1;
+    {   
+        Vector pxl(2), pxr(2);
+        pxl[0] = cogL[0];         // specify somehow the pixel within the left image plane
+        pxl[1] = cogL[1];
+        pxr[0] = cogR[0];         // specify somehow the pixel within the right image plane
+        pxr[1] = cogR[1];
 
-        // specify the pixel where blue ball is
-        Vector px(2);
-        px[0] = cogR[0];
-        px[1] = cogR[1];
-        
-        // specify the plane in the root reference frame as ax+by+cz+d=0; z=-0.12 in this case
-        Vector plane(4);
-        plane[0] = 0.0;     // a
-        plane[1] = 0.0;     // b
-        plane[2] = 1.0;     // c
-        plane[3] = 0.12;    // d
-        
         // get the projection
         Vector vectPos;
-        igaze->get3DPointOnPlane(camSel,px,plane,vectPos);
+        igaze->triangulate3DPoint(pxl,pxr,vectPos);
         
 		return vectPos;
     }
@@ -107,9 +100,13 @@ protected:
     /***************************************************/
     Vector computeHandOrientation()
     {
-        // get the current pose
-        Vector vectPos, vectOri;
-        iarm->getPose(vectPos, vectOri);
+        //set the hand orientation
+        Matrix R(3,3);
+        // pose x-axis   y-axis        z-axis
+        R(0,0)=-1.0;  R(0,1)= 0.0;  R(0,2)= 0.0;    // x-coordinate in root frame
+        R(1,0)= 0.0;  R(1,1)= 0.0;  R(1,2)=-1.0;    // y-coordinate    "
+        R(2,0)= 0.0;  R(2,1)=-1.0;  R(2,2)= 0.0;    // z-coordinate    "
+        Vector vectOri=yarp::math::dcm2axis(R);
         
         return vectOri;
     }
@@ -121,11 +118,8 @@ protected:
         Vector vectPos = x;
         vectPos[1] += 0.1;
 
-        Vector vectOri = o;
-        vectOri[2] += 30*(3.14/180);
-
         // send request and wait until the motion is done
-        iarm->goToPoseSync(vectPos,vectOri);
+        iarm->goToPoseSync(vectPos,o);
         iarm->waitMotionDone(0.04);
     }
 
@@ -136,14 +130,15 @@ protected:
         Vector vectPos = x;
         vectPos[1] -= 0.1;
 
-        //Vector vectOri = o;
-        //vectOri[2] += 30*(3.14/180);
-
-        // set the velocity of movement 
+        //set the operation time
         iarm->setTrajTime(0.2);
+
         // send request and wait until the motion is done
         iarm->goToPoseSync(vectPos, o);
         iarm->waitMotionDone(0.04);
+
+        //store initial context
+        iarm->restoreContext(context_init);        // latch the context
     }
 
     /***************************************************/
@@ -188,20 +183,12 @@ protected:
     void home()
     {
         // move to the initial pose
-        iarm->setTrajTime(1.5);
         iarm->goToPoseSync(vectPosInit,vectOriInit);
         iarm->waitMotionDone(0.04);
 
         // gaze at the initial point
-        Vector fp(3);
-        fp[0]=-0.50;
-        fp[1]=+0.00;
-        fp[2]=+0.35;
-        igaze->lookAtFixationPoint(fp);
+        igaze->lookAtFixationPoint(vectGazeInit);
         igaze->waitMotionDone();
-        Vector x;
-        igaze->getFixationPoint(x);
-        cout<<"final error = "<<norm(fp-x)<<endl;
     }
 
 public:
@@ -223,7 +210,6 @@ public:
                 ok=true;
                 break;
             }
-
             Time::delay(1.0);
         }
 
@@ -235,6 +221,15 @@ public:
         if (drvArm.isValid()){
             drvArm.view(iarm);
         }
+
+        //enable the torso joints
+        Vector curDof;
+        iarm->getDOF(curDof);
+        Vector newDof(3);
+        newDof[0]=1;    // torso pitch: 1 => enable
+        newDof[1]=1;    // torso roll:  1 => enable
+        newDof[2]=1;    // torso yaw:   1 => enable
+        iarm->setDOF(newDof,curDof);
 
 
         // initialize the gaze controller
@@ -252,7 +247,6 @@ public:
                 ok=true;
                 break;
             }
-
             Time::delay(1.0);
         }
 
@@ -265,8 +259,16 @@ public:
             drvGaze.view(igaze);
         }
 
-        // store the initial pose
+
+        //store the initial pose
         iarm->getPose(vectPosInit, vectOriInit);
+        igaze->getFixationPoint(vectGazeInit);
+
+        //set the operation time
+        iarm->setTrajTime(1);
+
+        //store initial context
+        iarm->storeContext(&context_init);        // latch the context
 
         //open the ports
         imgLPortIn.open("/imgL:i");
@@ -306,8 +308,7 @@ public:
     bool respond(const Bottle &command, Bottle &reply)
     {
         string cmd=command.get(0).asString();
-        if (cmd=="help")
-        {
+        if(cmd=="help"){
             reply.addVocab(Vocab::encode("many"));
             reply.addString("Available commands:");
             reply.addString("- look_down");
@@ -315,41 +316,37 @@ public:
             reply.addString("- home");
             reply.addString("- quit");
         }
-        else if (cmd=="look_down")
-        {
+        else if(cmd=="look_down"){
             look_down();
             // we assume the robot is not moving now
             reply.addString("ack");
             reply.addString("Yep! I'm looking down now!");
         }
-        else if (cmd=="make_it_roll")
-        {
+        else if(cmd=="make_it_roll"){
             //check whether the ball is on both views
             bool go = okL && okR;
 
-            if (go)
-            {
+            if(go){
                 make_it_roll(cogL,cogR);
                 // we assume the robot is not moving now
                 reply.addString("ack");
                 reply.addString("Yeah! I've made it roll like a charm!");
             }
-            else
-            {
+            else{
                 reply.addString("nack");
                 reply.addString("I don't see any object!");
             }
         }
-        else if (cmd=="home")
-        {
+        else if (cmd=="home"){
             home();
             // we assume the robot is not moving now
             reply.addString("ack");
             reply.addString("I've got the hard work done! Going home.");
         }
-        else
+        else{
             // the father class already handles the "quit" command
             return RFModule::respond(command,reply);
+        }
 
         return true;
     }
@@ -368,8 +365,9 @@ public:
         ImageOf<PixelRgb> *imgR=imgRPortIn.read();
 
         // interrupt sequence detected
-        if ((imgL==NULL) || (imgR==NULL))
+        if((imgL==NULL) || (imgR==NULL)){
             return false;
+        }
 
         // compute the center-of-mass of pixels of our color
         mutex.lock();
@@ -380,11 +378,13 @@ public:
         PixelRgb color;
         color.r=255; color.g=0; color.b=0;
 
-        if (okL)
+        if (okL){
             draw::addCircle(*imgL,color,(int)cogL[0],(int)cogL[1],5);
+        }
 
-        if (okR)
+        if (okR){
             draw::addCircle(*imgR,color,(int)cogR[0],(int)cogR[1],5);
+        }
 
         imgLPortOut.prepare()=*imgL;
         imgRPortOut.prepare()=*imgR;
@@ -401,8 +401,7 @@ public:
 int main()
 {
     Network yarp;
-    if (!yarp.checkNetwork())
-    {
+    if(!yarp.checkNetwork()){
         yError()<<"YARP doesn't seem to be available";
         return 1;
     }
