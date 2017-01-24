@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include <rtf/yarp/YarpTestCase.h>
+#include <C:/Program Files/robotology/robot-testing-master/src/middleware/yarp/include/rtf/yarp/YarpTestCase.h>
 #include <rtf/dll/Plugin.h>
 
 #include <yarp/os/all.h>

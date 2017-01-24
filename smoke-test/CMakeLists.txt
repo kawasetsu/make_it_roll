@@ -22,6 +22,8 @@ include_directories(${CMAKE_SOURCE_DIR}
                     ${RTF_INCLUDE_DIRS}
                     ${YARP_INCLUDE_DIRS}
                     ${YARP_HELPERS_INCLUDE_DIR})
+include_directories(C:/Program Files/robotology/robot-testing-master/src/middleware/yarp/include)
+include_directories(C:/Program Files/robotology/robot-testing-master/src/middleware/yarp/include/rtf/yarp)
 
 # add required libraries
 link_libraries(${RTF_LIBRARIES} ${YARP_LIBRARIES})

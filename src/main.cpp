@@ -32,6 +32,9 @@ protected:
     Vector cogL,cogR;
     bool okL,okR;
 
+    //vector for initial pose
+    Vector vectPosInit, vectOriInit;
+
     /***************************************************/
     bool getCOG(ImageOf<PixelRgb> &img, Vector &cog)
     {
@@ -67,37 +70,97 @@ protected:
     /***************************************************/
     Vector retrieveTarget3D(const Vector &cogL, const Vector &cogR)
     {
-        // FILL IN THE CODE
+        // select the right image plane: 0 (left), 1 (right)
+        int camSel=1;
+
+        // specify the pixel where blue ball is
+        Vector px(2);
+        px[0] = cogR[0];
+        px[1] = cogR[1];
+        
+        // specify the plane in the root reference frame as ax+by+cz+d=0; z=-0.12 in this case
+        Vector plane(4);
+        plane[0] = 0.0;     // a
+        plane[1] = 0.0;     // b
+        plane[2] = 1.0;     // c
+        plane[3] = 0.12;    // d
+        
+        // get the projection
+        Vector vectPos;
+        igaze->get3DPointOnPlane(camSel,px,plane,vectPos);
+        
+		return vectPos;
     }
 
     /***************************************************/
     void fixate(const Vector &x)
     {
-        // FILL IN THE CODE
+        // request to gaze at the desired fixation point and wait
+        igaze->lookAtFixationPoint(x);
+        igaze->waitMotionDone();
+        // get the current fixation point and measure the error
+        Vector tmp;
+        igaze->getFixationPoint(tmp);
+        cout<<"final error = "<<norm(x-tmp)<<endl;
     }
 
     /***************************************************/
     Vector computeHandOrientation()
     {
-        // FILL IN THE CODE
+        // get the current pose
+        Vector vectPos, vectOri;
+        iarm->getPose(vectPos, vectOri);
+        
+        return vectOri;
     }
 
     /***************************************************/
     void approachTargetWithHand(const Vector &x, const Vector &o)
     {
-        // FILL IN THE CODE
+        // move to the right hand to the side of the ball
+        Vector vectPos = x;
+        vectPos[1] += 0.1;
+
+        Vector vectOri = o;
+        vectOri[2] += 30*(3.14/180);
+
+        // send request and wait until the motion is done
+        iarm->goToPoseSync(vectPos,vectOri);
+        iarm->waitMotionDone(0.04);
     }
 
     /***************************************************/
     void roll(const Vector &x, const Vector &o)
     {
-        // FILL IN THE CODE
+        // move to the right hand to push the ball
+        Vector vectPos = x;
+        vectPos[1] -= 0.1;
+
+        //Vector vectOri = o;
+        //vectOri[2] += 30*(3.14/180);
+
+        // set the velocity of movement 
+        iarm->setTrajTime(0.2);
+        // send request and wait until the motion is done
+        iarm->goToPoseSync(vectPos, o);
+        iarm->waitMotionDone(0.04);
     }
 
     /***************************************************/
     void look_down()
     {
-        // FILL IN THE CODE
+        // set the position where to look
+        Vector fp(3);
+        fp[0]=-0.50;    // x-component [m]
+        fp[1]=+0.00;    // y-component [m]
+        fp[2]=+0.00;    // z-component [m]
+        // request to gaze at the desired fixation point and wait
+        igaze->lookAtFixationPoint(fp);
+        igaze->waitMotionDone();
+        // get the current fixation point and measure the error
+        Vector x;
+        igaze->getFixationPoint(x);
+        cout<<"final error = "<<norm(fp-x)<<endl;
     }
 
     /***************************************************/
@@ -124,13 +187,28 @@ protected:
     /***************************************************/
     void home()
     {
-        // FILL IN THE CODE
+        // move to the initial pose
+        iarm->setTrajTime(1.5);
+        iarm->goToPoseSync(vectPosInit,vectOriInit);
+        iarm->waitMotionDone(0.04);
+
+        // gaze at the initial point
+        Vector fp(3);
+        fp[0]=-0.50;
+        fp[1]=+0.00;
+        fp[2]=+0.35;
+        igaze->lookAtFixationPoint(fp);
+        igaze->waitMotionDone();
+        Vector x;
+        igaze->getFixationPoint(x);
+        cout<<"final error = "<<norm(fp-x)<<endl;
     }
 
 public:
     /***************************************************/
     bool configure(ResourceFinder &rf)
     {
+        // initialize the right arm controller
         Property optArm;
         optArm.put("device","cartesiancontrollerclient");
         optArm.put("remote","/icubSim/cartesianController/right_arm");
@@ -139,12 +217,9 @@ public:
         // let's give the controller some time to warm up
         bool ok=false;
         double t0=Time::now();
-        while (Time::now()-t0<10.0)
-        {
-            // this might fail if controller
-            // is not connected to solver yet
-            if (drvArm.open(optArm))
-            {
+        while (Time::now()-t0<10.0){
+            // this might fail if controller is not connected to solver yet
+            if (drvArm.open(optArm)){
                 ok=true;
                 break;
             }
@@ -152,14 +227,48 @@ public:
             Time::delay(1.0);
         }
 
-        if (!ok)
-        {
+        if (!ok){
             yError()<<"Unable to open the Cartesian Controller";
             return false;
         }
 
-        // FILL IN THE CODE
+        if (drvArm.isValid()){
+            drvArm.view(iarm);
+        }
 
+
+        // initialize the gaze controller
+        Property optGaze;
+        optGaze.put("device","gazecontrollerclient");
+        optGaze.put("remote","/iKinGazeCtrl");
+        optGaze.put("local","/client/gaze");
+
+        // let's give the controller some time to warm up
+        ok=false;
+        t0=Time::now();
+        while (Time::now()-t0<10.0){
+            // this might fail if controller is not connected to solver yet
+            if (drvGaze.open(optGaze)){
+                ok=true;
+                break;
+            }
+
+            Time::delay(1.0);
+        }
+
+        if (!ok){
+            yError()<<"Unable to open the Cartesian Controller";
+            return false;
+        }
+
+        if (drvGaze.isValid()){
+            drvGaze.view(igaze);
+        }
+
+        // store the initial pose
+        iarm->getPose(vectPosInit, vectOriInit);
+
+        //open the ports
         imgLPortIn.open("/imgL:i");
         imgRPortIn.open("/imgR:i");
 
@@ -215,8 +324,8 @@ public:
         }
         else if (cmd=="make_it_roll")
         {
-            // FILL IN THE CODE
-            bool go=false;   // you need to properly handle this flag
+            //check whether the ball is on both views
+            bool go = okL && okR;
 
             if (go)
             {
