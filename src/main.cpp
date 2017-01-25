@@ -15,8 +15,6 @@ using namespace yarp::dev;
 using namespace yarp::sig;
 using namespace yarp::math;
 
-#define M_PI 3.14159265359
-
 
 /***************************************************/
 class CtrlModule: public RFModule
@@ -72,15 +70,10 @@ protected:
     /***************************************************/
     Vector retrieveTarget3D(const Vector &cogL, const Vector &cogR)
     {   
-        Vector pxl(2), pxr(2);
-        pxl[0] = cogL[0];         // specify somehow the pixel within the left image plane
-        pxl[1] = cogL[1];
-        pxr[0] = cogR[0];         // specify somehow the pixel within the right image plane
-        pxr[1] = cogR[1];
 
         // get the projection
         Vector vectPos;
-        igaze->triangulate3DPoint(pxl,pxr,vectPos);
+        igaze->triangulate3DPoint(cogL,cogR,vectPos);
         
 		return vectPos;
     }
@@ -137,8 +130,8 @@ protected:
         iarm->goToPoseSync(vectPos, o);
         iarm->waitMotionDone(0.04);
 
-        //store initial context
-        iarm->restoreContext(context_init);        // latch the context
+        //return initial context
+        iarm->restoreContext(context_init);
     }
 
     /***************************************************/
@@ -264,11 +257,12 @@ public:
         iarm->getPose(vectPosInit, vectOriInit);
         igaze->getFixationPoint(vectGazeInit);
 
-        //set the operation time
-        iarm->setTrajTime(1);
 
         //store initial context
-        iarm->storeContext(&context_init);        // latch the context
+        iarm->storeContext(&context_init);
+
+        //set the operation time
+        iarm->setTrajTime(1);
 
         //open the ports
         imgLPortIn.open("/imgL:i");
@@ -324,7 +318,9 @@ public:
         }
         else if(cmd=="make_it_roll"){
             //check whether the ball is on both views
+            mutex.lock();
             bool go = okL && okR;
+            mutex.unlock();
 
             if(go){
                 make_it_roll(cogL,cogR);
@@ -354,7 +350,8 @@ public:
     /***************************************************/
     double getPeriod()
     {
-        return 0.0;     // sync upon incoming images
+        // sync upon incoming images
+        return 0.0;
     }
 
     /***************************************************/
